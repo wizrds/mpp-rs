@@ -193,8 +193,7 @@ async fn get_on_chain_channel<P: Provider<TempoNetwork>>(
 }
 
 /// Validate the close voucher amount against spent, on-chain settled, and deposit.
-/// Matches mppx handleClose:
-/// https://github.com/wevm/mppx/blob/c526ea6/src/tempo/server/Session.ts#L837-L846
+/// Mirrors mppx handleClose `isUntouchedZeroClose` (mppx 0.6.30) and draft-tempo-session-00 §12.1.
 fn validate_close_amount(
     cumulative_amount: u128,
     spent: u128,
@@ -207,7 +206,10 @@ fn validate_close_amount(
             spent,
         )));
     }
-    if cumulative_amount <= on_chain_settled {
+    // A channel that consumed nothing may close at 0, refunding the full deposit.
+    let is_untouched_zero_close =
+        cumulative_amount == 0 && spent == 0 && on_chain_settled == 0;
+    if !is_untouched_zero_close && cumulative_amount <= on_chain_settled {
         return Err(VerificationError::new(format!(
             "close voucher amount must be > {} (on-chain settled)",
             on_chain_settled,
@@ -3124,14 +3126,14 @@ mod tests {
     }
 
     #[test]
-    fn test_close_at_zero_rejects_when_zero_settled() {
-        // close at 0 with settled=0: 0 <= 0 is true, so rejected
-        let err = validate_close_amount(0, 0, 0, 10_000_000).unwrap_err();
-        assert!(
-            err.message.contains("on-chain settled"),
-            "got: {}",
-            err.message,
-        );
+    fn test_untouched_zero_close_is_allowed() {
+        assert!(validate_close_amount(0, 0, 0, 10_000_000).is_ok());
+    }
+
+    #[test]
+    fn test_zero_close_rejects_when_something_settled() {
+        let err = validate_close_amount(0, 0, 1_000, 10_000_000).unwrap_err();
+        assert!(err.message.contains("on-chain settled"), "got: {}", err.message);
     }
 
     #[test]
